@@ -1,0 +1,2 @@
+# Heatmap-correlation-for-interdomain-species-count
+This script can be used in R to calculate the most abundant species across sampling sites and determine if there are any correlations between these species. This script can be used for a single matrix of species count. The aim is to do so for two domains, which both have their separate species count dataset. The text in the file is in french. If you know how to further optimise the code, please let me know, I'm new to coding.
