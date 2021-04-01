@@ -1,0 +1,179 @@
+---
+title: "Heat map - OTU"
+author: "Pascal Bredin"
+date: "2/7/2021"
+output: html_document
+---
+
+## Objectif
+
+Le but de ce programme est de créer un heatmap similaire à la figure 3 dans l'article https://doi.org/10.1038/s41598-019-53975-9 pour évaluer les relations entre les bactéries et les eucaryotes, ainsi que les relations au sein de ces domaines. 
+
+Télécharger les packages nécessaires.
+
+```{r}
+# install.packages("funrar")
+library(funrar)
+# install.packages("ggplot2")
+library(ggplot2)
+# install.packages("ggcorrplot")
+library(ggcorrplot)
+# install.packages("Hmisc")
+library(Hmisc)
+#install.packages("tidyverse")
+library(tidyverse)
+#install.packages("dplyr")
+library(dplyr)
+#install.packages("plyr")
+library(plyr)
+#install.packages("reshape2")
+library(reshape2)
+#install.packages("car")
+library(car)
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+ #   install.packages("BiocManager")
+
+#BiocManager::install("phyloseq")
+#install.packages("phyloseq")
+library(phyloseq)
+#BiocManager::install("metagenomeSeq")
+library(metagenomeSeq)
+
+```
+
+Télécharger les données OTU des bactéries et des eucaryotes. Le puit 192 n'a pas de données d'eucaryotes alors il est enlevé. Les ASV qui sont présents dans moins de 5 sites sont enelvés et moins de 1000. 
+
+```{r}
+#Télécharger les matrices
+bac = as.matrix(read.csv("ASV.matrice.SN.csv", header = TRUE, row.names = 1))
+euka = as.matrix(read.csv("ASV.matrice.SN.euka.csv", header = TRUE, row.names = 1))
+
+#Homogéiniser les noms des puits
+colnames(bac) = colnames(bac)%>%str_replace("X", "P_")
+
+#Rendre tous les ASV représentatifs
+rownames(bac) = rownames(bac) %>% str_replace("ASV", "bac")
+rownames(euka) = rownames(euka) %>% str_replace("ASV", "euka") %>%  str_replace("E", "")
+
+#Enlver le puit 192 et 348
+bac = subset(bac, select = -c(P_192, P_348))
+euka = subset(euka, select = -c(P_192, P_348))
+
+#Transformer en phyloseq
+bac = phyloseq(otu_table(bac, taxa_are_rows = TRUE))
+euka = phyloseq(otu_table(euka, taxa_are_rows = TRUE))
+
+#Retrait des puits ayant une trop faible abondance
+bac = prune_samples(sample_sums(bac)>=1000, bac)
+euka = prune_samples(sample_sums(euka)>=1000, euka)
+
+# #Retrait des ASV qui ont moins de 5 représentants
+bac = filter_taxa(bac, function(x) sum(x) > 5, TRUE)
+euka = filter_taxa(euka, function(x) sum(x) > 5, TRUE)
+
+#Retrait des ASV qui sont présents dans moins de 3 sites
+bac = filter_taxa(bac, function(x) sum(x!=0) > 3, TRUE)
+euka = filter_taxa(euka, function(x) sum(x!=0) > 3, TRUE)
+
+#Transformer le phyloseq en data_frame
+bac = as.data.frame(get_taxa(bac))
+euka = as.data.frame(get_taxa(euka))
+
+## Sélectionner uniquement les sites présents dans les 2 domaines
+i = intersect(colnames(bac), colnames(euka))
+bac = select(bac, i)
+euka = select(euka, i)
+```
+
+
+Transformer les données d'abondance en abondances relatives
+
+```{r}
+bac = t(bac)
+euka = t(euka)
+
+bac = make_relative(as.matrix(bac))
+euka = make_relative(as.matrix(euka))
+```
+
+
+Les bactéries et eucaryotes les plus abondants seront calculés en additionnant les abondances relative des OTU dans chacun des puits. Les 15 plus abondants seront retenus. La dernière colone qui représente l'abondance relative cumulative est enlevée. 
+
+```{r}
+
+somme_rel_bac  = as.matrix(colSums(bac))
+somme_rel_euka = as.matrix(colSums(euka))
+
+bac = t(bac)
+euka = t(euka)
+
+bac  = cbind(bac, somme_rel_bac)
+euka = cbind(euka, somme_rel_euka)
+
+#Ordonner les ASV selon leur abondance relative
+bac  = bac[order(bac[,ncol(bac)], decreasing = TRUE),]
+euka = euka[order(euka[,ncol(euka)], decreasing = TRUE),]
+
+#Enlever la colone avec les sommes relatives et garder les 15 ASV les plus abondants
+bac  = bac[1:15, -ncol(bac)]
+euka = euka[1:15, -ncol(euka)]
+```
+
+
+
+Ajouter les corrélations interdomaines (bac x euka, bac x arc, euka x arc)
+
+```{r}
+bac = as.data.frame(bac)
+euka = as.data.frame(euka)
+
+bac_euka = rbind(bac, euka)
+```
+
+
+Maintenant, procéder avec la corrélation et extraire les p-values et les corrélations de la matrice. La fonction ggplot préfère les données en format long.
+
+```{r}
+options(scipen = 99999)
+
+#Matrice de corrélation de la relation entre bactéries et eucaryotes
+bac_euka_cor = rcorr(as.matrix(t(bac_euka)), type = "spearman")
+bac_euka_cor_r = bac_euka_cor$r
+bac_euka_cor_p = bac_euka_cor$P
+
+bac_euka_r <- as.matrix(bac_euka_cor_r[16:30,1:15])
+bac_euka_p = as.matrix(bac_euka_cor_p[16:30,1:15])
+
+bac_euka_p_long <- reshape2::melt(bac_euka_p)
+bac_euka_r_long <- reshape2::melt(bac_euka_r)
+bac_euka_r_long$p <- bac_euka_p_long$value 
+```
+
+Visualiser les corrélations
+
+```{r}
+#Graphique pour les corrélations entre bactéries et eucaryotes
+stars_bac_euka = cut(bac_euka_r_long$p, breaks=c(-Inf, 0.001, 0.01, 0.05, Inf), label=c("*", "*", "*", ""))
+
+graph_bac_euka = ggplot(aes(x=Var1, y=Var2, fill=value), data=bac_euka_r_long)
+
+fig_bac_euka = graph_bac_euka + geom_tile() +
+  scale_fill_distiller(palette = "RdBu",limits = c(-1,1), guide = guide_colourbar(nbin=100, draw.ulim = FALSE, draw.llim = FALSE, barheight = 10)) + 
+  geom_text(aes(label=stars_bac_euka), color="black", size=5) + 
+  labs(y=NULL, x=NULL, fill="rho") + 
+  theme_bw() + 
+  theme(axis.text.x=element_text(angle = -45, hjust = 0),legend.title = element_blank())+
+  coord_fixed()
+
+fig_bac_euka
+
+```
+
+
+
+
+
+
+
+
+
